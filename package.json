@@ -1,0 +1,10 @@
+{
+        "name": "oauth2-server"
+        , "version": "0.1.0"
+        , "dependencies": {
+                "express": "latest"
+                , "jade": "latest"
+                , "qs": "latest"
+                , "jshashes": "latest"
+  }
+}
