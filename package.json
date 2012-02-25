@@ -6,5 +6,6 @@
                 , "jade": "latest"
                 , "qs": "latest"
                 , "jshashes": "latest"
+				, "mongodb": "latest"
   }
 }
