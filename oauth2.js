@@ -160,7 +160,11 @@ app.post("/oauth2/do-login", function(req,res) {
 
 app.get("/oauth2/scopes", function(req,res) {
 	
-	// TODO: check if user is signed in:
+	if ( req.cookies.logged_in == null ) {
+		res.redirect("/oauth2/login");
+		res.end();
+		return;
+	}
 	
 	var sessionCode = req.param("ses", null);
 	if ( sessionCode == null ) {
@@ -207,7 +211,11 @@ app.get("/oauth2/scopes", function(req,res) {
 });
 app.get("/oauth2/do-scopes", function(req,res) {
 	
-	// TODO: check if user is signed in:
+	if ( req.cookies.logged_in == null ) {
+		res.redirect("/oauth2/login");
+		res.end();
+		return;
+	}
 	
 	var sessionCode = req.param("ses", null);
 	if ( sessionCode == null ) {
@@ -224,6 +232,11 @@ app.get("/oauth2/do-scopes", function(req,res) {
 	
 	if ( oauth2.isLoginSessionCodeValid( sessionCode ) ) {
 		var data = oauth2.getOauth2InputBySessionLoginCode( sessionCode );
+		
+		// check if user has allowed or denied the access:
+		// if allowed - saved the requested scopes on the user for the client_id
+			// generate auth code and send send back
+		// othwerwise send back with access_denied
 		
 	} else {
 		res.writeHead(401, "Session expired");
@@ -244,14 +257,17 @@ app.get("/oauth2/auth", function(req,res) {
 	
 	oauth2.clientIdLookup( client_id, function(clientApp) {
 		if ( clientApp == null ) {
-			res.writeHead(400, "Client ID invalid");
+			// TODO: if redirect_uri specified, send back
+			res.writeHead(400, "unauthorized_client: Client ID invalid");
 			res.end();
 		} else {
 			
 			if ( req.cookies.logged_in != null ) {
 				
 				// get account by user id:
-					// generate login code, redirect to /oauth2/scopes
+				// check if the user authorized the app and all scopes requested
+					// if true - generate the code and send back
+					// otherwise - show scopes page
 				
 			} else {
 				var loginSessionCode = oauth2.generateLoginSessionCode(client_id);
@@ -276,6 +292,10 @@ app.get("/oauth2/auth", function(req,res) {
 		res.send( JSON.stringify( authResponse ) );
 	}
 	*/
+});
+
+app.get("/oauth2/token", function(req,res) {
+	
 });
 
 app.listen(3000);
