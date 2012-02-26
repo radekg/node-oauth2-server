@@ -86,11 +86,23 @@ OAuth2Server.prototype.isLoginSessionCodeValid = function( code ) {
 	if ( this.__$session_code_storage == null ) {
 		this.__$session_code_storage = {};
 	}
-	return ( this.__$session_code_storage[ code ] != null );
+	if ( this.__$session_code_storage[ code ] != null ) {
+		this.__$session_code_storage[ code ].created_at = (new Date()).getTime();
+		return true;
+	}
+	return false;
 };
 
 OAuth2Server.prototype.getOauth2InputBySessionLoginCode = function( code ) {
-	return this.__$session_code_storage[ code ];
+	if ( this.__$session_code_storage[ code ] != null ) {
+		this.__$session_code_storage[ code ].created_at = (new Date()).getTime();
+		var r = {};
+		for ( var key in this.__$session_code_storage[ code ] ) {
+			r[ key ] = this.__$session_code_storage[ code ][key];
+		}
+		return r;
+	}
+	return null;
 };
 
 OAuth2Server.prototype.processLookup = function(response_type, client_id, scope, state) {

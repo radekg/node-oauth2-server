@@ -91,12 +91,20 @@ function setupOAuth2Server() {
 	});
 }
 
+function noSessionCode( res ) {
+	res.writeHead(401, "Session expired");
+	res.end();
+}
+
 var app = express.createServer();
+app.set('view options', { layout: false });
+app.set('view engine', 'jade');
+app.use(express.static(__dirname + '/public'));
 app.use(express.cookieParser());
 app.use(express.bodyParser());
 
 app.get("/", function(req,res) {
-	res.send("<a href='http://localhost:3000/oauth2/auth?response_type=code&client_id=O0-rdIQGiKqihdwE9-DqudbWY&redirect_uri=" + encodeURIComponent("http://testoauth2:2800/oauth2callback") + "&scope=read edit new account'>do the test</a>");
+	res.render("root", { encodedUrl: encodeURIComponent("http://testoauth2:2800/oauth2callback") });
 });
 
 app.get("/oauth2/logout", function(req,res) {
@@ -108,24 +116,17 @@ app.get("/oauth2/login", function(req,res) {
 	
 	var sessionCode = req.param("ses", null);
 	if ( sessionCode == null ) {
-		res.writeHead(401, "Session expired");
-		res.end();
-		return;
+		return noSessionCode( res );
 	}
 	
 	if ( oauth2.isLoginSessionCodeValid( oauth2.fixString( sessionCode ) ) ) {
 		var error = req.cookies.error;
-		var html = "<form action='/oauth2/do-login' method='post'>";
-		if ( error != null ) {
-			html += "There was an error: " + error;
-			res.clearCookie("error");
-		}
-		html += "<input type='hidden' name='ses' value='" + sessionCode + "' /><br/>";
-		html += "Username: <input type='text' name='username' /><br/>";
-		html += "Password: <input type='password' name='password' /><br/>";
-		html += "<input type='submit' value='Login' />";
-		html += "</form>";
-		res.send(html);
+		res.clearCookie("error")
+		res.render("login", {
+			res: res
+			, sessionCode: sessionCode
+			, error: error
+		});
 	} else {
 		res.writeHead(401, "Session expired " + oauth2.fixString( sessionCode ) );
 		res.end();
@@ -133,13 +134,15 @@ app.get("/oauth2/login", function(req,res) {
 });
 
 app.post("/oauth2/do-login", function(req,res) {
+	
 	var sessionCode = req.param("ses", null);
 	if ( sessionCode == null ) {
-		res.writeHead(401, "Session expired");
-		res.end();
-		return;
+		return noSessionCode( res );
 	}
-	if ( oauth2.isLoginSessionCodeValid( oauth2.fixString( sessionCode ) ) ) {
+	
+	sessionCode = oauth2.fixString( sessionCode );
+	
+	if ( oauth2.isLoginSessionCodeValid( sessionCode ) ) {
 		oauth2.accountLogin( req.param("username", null), req.param("password", null), function( account ) {
 			if ( account != null ) {
 				res.cookie("logged_in", account.id);
@@ -150,16 +153,18 @@ app.post("/oauth2/do-login", function(req,res) {
 			}
 		} );
 	} else {
-		res.writeHead(401, "Session expired " + oauth2.fixString( sessionCode ));
+		res.writeHead(401, "Session expired " + sessionCode );
 		res.end();
 	}
 });
+
 app.get("/oauth2/scopes", function(req,res) {
+	
+	// TODO: check if user is signed in:
+	
 	var sessionCode = req.param("ses", null);
 	if ( sessionCode == null ) {
-		res.writeHead(401, "Session expired");
-		res.end();
-		return;
+		return noSessionCode( res );
 	}
 	
 	sessionCode = oauth2.fixString( sessionCode );
@@ -173,9 +178,6 @@ app.get("/oauth2/scopes", function(req,res) {
 				res.end();
 			} else {
 				
-				var html = "<strong>" + clientApp.name + "</strong> is requesting for the following permissions:";
-				html += "<ul>";
-				
 				var requestedScopes = data.scope.split(" ");
 				var scopes = [];
 				for ( var i=0; i<requestedScopes.length; i++ ) {
@@ -186,21 +188,14 @@ app.get("/oauth2/scopes", function(req,res) {
 						res.end();
 						return;
 					} else {
-						html += "<li>" + aScopeName + "</li>";
+						scopes.push( { scope: requestedScopes[i], name: aScopeName } );
 					}
 				}
-				
-				html += "</ul>";
-				html += "<form action='/oauth2/do-scopes' method='post'>";
-				html += "<input type='hidden' name='access_status' value='allow' />";
-				html += "<input type='button' value='Allow access' />";
-				html += "</form>";
-				
-				html += "<form action='/oauth2/do-scopes' method='post'>";
-				html += "<input type='hidden' name='access_status' value='deny' />";
-				html += "<input type='submit' value='No, thanks' />";
-				html += "</form>";
-				res.send( html );
+				res.render("scopes", {
+					scopes: scopes
+					, clientApp: clientApp
+					, sessionCode: sessionCode
+				});
 			}
 		});
 		
@@ -211,12 +206,30 @@ app.get("/oauth2/scopes", function(req,res) {
 	
 });
 app.get("/oauth2/do-scopes", function(req,res) {
+	
+	// TODO: check if user is signed in:
+	
 	var sessionCode = req.param("ses", null);
 	if ( sessionCode == null ) {
-		res.writeHead(401, "Session expired");
-		res.end();
+		return noSessionCode( res );
+	}
+	var accessStatus = req.param("access_status", null);
+	if ( accessStatus !== "allow" && accessStatus !== "deny" ) {
+		res.writeHead(400, "Bad request");
+		req.end();
 		return;
 	}
+	
+	sessionCode = oauth2.fixString( sessionCode );
+	
+	if ( oauth2.isLoginSessionCodeValid( sessionCode ) ) {
+		var data = oauth2.getOauth2InputBySessionLoginCode( sessionCode );
+		
+	} else {
+		res.writeHead(401, "Session expired");
+		res.end();
+	}
+		
 });
 
 app.get("/oauth2/auth", function(req,res) {
@@ -236,9 +249,9 @@ app.get("/oauth2/auth", function(req,res) {
 		} else {
 			
 			if ( req.cookies.logged_in != null ) {
-				if ( scope == null ) {
-					scope = [];
-				}
+				
+				// get account by user id:
+					// generate login code, redirect to /oauth2/scopes
 				
 			} else {
 				var loginSessionCode = oauth2.generateLoginSessionCode(client_id);

@@ -1,0 +1,16 @@
+html
+head
+	title Authorization
+body
+	p <strong>#{clientApp.name}</strong> is requesting for the following permissions:
+	ul
+		each scope in scopes
+			li #{scope.name}
+	form(action='/oauth2/do-scopes', method='post')
+		input(type='hidden', name='access_status', value='allow')
+		input(type='hidden', name='ses', value='#{sessionCode}')
+		input(type='button', value='Allow access')
+	form(action='/oauth2/do-scopes', method='post')
+		input(type='hidden', name='access_status', value='deny')
+		input(type='hidden', name='ses', value='#{sessionCode}')
+		input(type='submit', value='No, thanks')
