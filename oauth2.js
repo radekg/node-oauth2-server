@@ -53,24 +53,83 @@ function setupOAuth2Server() {
 				util.puts( " -> OAuth2 server initialized with scopes: " + JSON.stringify( arr ) );
 				
 				oauth2 = new OAuth2Server({ scopes: arr });
-				oauth2.accountLogin = function( username, password, callback ) {
+				oauth2.storeAuthCode = function( code, client_id, expiry ) {
+					if ( typeof expiry != "number" ) {
+						expiry = oauth2.expiryDefault;
+					}
+					var expiryDate = new Date( (new Date()).getTime() + expiry );
+					mongodClient.collection("authCodes", function(err, collection) {
+						collection.insert( { auth_code: code, client_id: client_id, expiries: expiryDate.getTime() } );
+					});
+				};
+				oauth2.timer_authCodeHandler = function( runAt ) {
+					mongodClient.collection("authCodes", function(err,collection) {
+						collection.remove( { expires: { $lt: runAt } } )
+					});
+				};
+				
+				oauth2.getOauth2InputBySessionLoginCode = function( code, callback ) {
+					mongodClient.collection("sessionLoginCodes", function(err, collection) {
+						collection.find( { code: code }, function(error,cursor) {
+							cursor.toArray( function(err,arr) {
+								if ( arr.length == 0 ) {
+									callback( null );
+								} else {
+									var item = arr[0];
+									process.nextTick( function() {
+										mongodClient.collection("sessionLoginCodes", function( err, n_collection ) {
+											item.expires = (new Date() + item.expiresBy);
+											n_collection.update( { code: item.code, item } );
+										});
+									} );
+									callback(item);
+								}
+							});
+						});
+					});
+				};
+				oauth2.storeSessionLoginCode = function( code, state, expiry ) {
+					if ( typeof expiry != "number" ) {
+						expiry = oauth2.sessionLoginExpiryDefault;
+					}
+					var expiryDate = new Date( (new Date()).getTime() + expiry );
+					mongodClient.collection("sessionLoginCodes", function(err, collection) {
+						collection.insert( { code: code, stateObject: state, expiries: expiryDate.getTime(), expiresBy: expiry } );
+					});
+				};
+				oauth2.timer_sessionLoginCodeHandler = function( runAt ) {
+					mongodClient.collection("sessionLoginCodes", function(err,collection) {
+						collection.remove( { expires: { $lt: runAt } } )
+					});
+				};
+				
+				oauth2.updateUserPrivileges = function( user_id, client_id, scopes ) {
+					this.getUserAccountBy( { id: user_id }, function( account ) {
+						if ( account != null ) {
+							if ( account.authorized == null || account.authorized == undefined ) {
+								account.authorized = {};
+							}
+							account.authorized[ client_id ] = scopes;
+							process.nextTick(function() {
+								mongodClient.collection("users", function( err, collection ) {
+									collection.update( { id: user_id }, account );
+								});
+							});
+						}
+					} );
+				};
+				oauth2.getUserAccountBy = function( params, callback ) {
 					mongodClient.collection("users", function(err, collection) {
-						collection.find( { username: username }, function(err, cursor) {
+						collection.find( params, function(err, cursor) {
 							cursor.toArray( function( err, arr ) {
 								if ( arr.length == 0 ) {
 									callback( null );
 								} else {
-									if ( arr[0].password == password ) {
-										callback( arr[0] );
-									} else {
-										callback( null );
-									}
+									callback( arr[0] );
 								}
 							} );
 						});
 					});
-				};
-				oauth2.accountAllowedScopes = function( account_id, client_id ) {
 				};
 				oauth2.clientIdLookup = function(client_id, callback) {
 					mongodClient.collection("apps", function(err, collection) {
@@ -119,18 +178,21 @@ app.get("/oauth2/login", function(req,res) {
 		return noSessionCode( res );
 	}
 	
-	if ( oauth2.isLoginSessionCodeValid( oauth2.fixString( sessionCode ) ) ) {
-		var error = req.cookies.error;
-		res.clearCookie("error")
-		res.render("login", {
-			res: res
-			, sessionCode: sessionCode
-			, error: error
-		});
-	} else {
-		res.writeHead(401, "Session expired " + oauth2.fixString( sessionCode ) );
-		res.end();
-	}
+	oauth2.getOauth2InputBySessionLoginCode( oauth2.fixString( sessionCode ), function( sessionData ) {
+		if ( sessionData == null ) {
+			res.writeHead(401, "Session expired " + oauth2.fixString( sessionCode ) );
+			res.end();
+		} else {
+			var error = req.cookies.error;
+			res.clearCookie("error")
+			res.render("login", {
+				res: res
+				, sessionCode: sessionCode
+				, error: error
+			});
+		}
+	} );
+	
 });
 
 app.post("/oauth2/do-login", function(req,res) {
@@ -140,22 +202,24 @@ app.post("/oauth2/do-login", function(req,res) {
 		return noSessionCode( res );
 	}
 	
-	sessionCode = oauth2.fixString( sessionCode );
+	oauth2.getOauth2InputBySessionLoginCode( oauth2.fixString( sessionCode ), function( sessionData ) {
+		if ( sessionData == null ) {
+			res.writeHead(401, "Session expired " + oauth2.fixString( sessionCode ) );
+			res.end();
+		} else {
+			// TODO: params should be loaded from an external function
+			oauth2.getUserAccountBy( { username: req.param("username", null), password: req.param("password", null) }, function( account ) {
+				if ( account != null ) {
+					res.cookie("logged_in", account.username);
+					res.redirect( "/oauth2/scopes?ses=" + oauth2.fixString( sessionCode ) );
+				} else {
+					res.cookie( "error", "Could not log you in." );
+					res.redirect("/oauth2/login?ses=" + oauth2.fixString( sessionCode ));
+				}
+			} );
+		}
+	});
 	
-	if ( oauth2.isLoginSessionCodeValid( sessionCode ) ) {
-		oauth2.accountLogin( req.param("username", null), req.param("password", null), function( account ) {
-			if ( account != null ) {
-				res.cookie("logged_in", account.id);
-				res.redirect( "/oauth2/scopes?ses=" + sessionCode );
-			} else {
-				res.cookie( "error", "Could not log you in." );
-				res.redirect("/oauth2/login?ses=" + sessionCode);
-			}
-		} );
-	} else {
-		res.writeHead(401, "Session expired " + sessionCode );
-		res.end();
-	}
 });
 
 app.get("/oauth2/scopes", function(req,res) {
@@ -171,42 +235,39 @@ app.get("/oauth2/scopes", function(req,res) {
 		return noSessionCode( res );
 	}
 	
-	sessionCode = oauth2.fixString( sessionCode );
-	
-	if ( oauth2.isLoginSessionCodeValid( sessionCode ) ) {
-		var data = oauth2.getOauth2InputBySessionLoginCode( sessionCode );
-		
-		oauth2.clientIdLookup( data.client_id, function(clientApp) {
-			if ( clientApp == null ) {
-				res.writeHead(400, "Client ID invalid");
-				res.end();
-			} else {
-				
-				var requestedScopes = data.scope.split(" ");
-				var scopes = [];
-				for ( var i=0; i<requestedScopes.length; i++ ) {
-					var aScopeName = oauth2.getScopeName( requestedScopes[i] );
-					if ( aScopeName == null ) {
-						// TODO: if redirect_uri specified, send back
-						res.writeHead(400, "invalid_scope: " + requestedScopes[i]);
-						res.end();
-						return;
-					} else {
-						scopes.push( { scope: requestedScopes[i], name: aScopeName } );
+	oauth2.getOauth2InputBySessionLoginCode( oauth2.fixString( sessionCode ), function( sessionData ) {
+		if ( sessionData == null ) {
+			res.writeHead(401, "Session expired");
+			res.end();
+		} else {
+			oauth2.clientIdLookup( sessionData.stateObject.client_id, function(clientApp) {
+				if ( clientApp == null ) {
+					res.writeHead(400, "Client ID invalid");
+					res.end();
+				} else {
+
+					var requestedScopes = sessionData.stateObject.scope.split(" ");
+					var scopes = [];
+					for ( var i=0; i<requestedScopes.length; i++ ) {
+						var aScopeName = oauth2.getScopeName( requestedScopes[i] );
+						if ( aScopeName == null ) {
+							// TODO: if redirect_uri specified, send back
+							res.writeHead(400, "invalid_scope: " + requestedScopes[i]);
+							res.end();
+							return;
+						} else {
+							scopes.push( { scope: requestedScopes[i], name: aScopeName } );
+						}
 					}
+					res.render("scopes", {
+						scopes: scopes
+						, clientApp: clientApp
+						, sessionCode: oauth2.fixString( sessionCode )
+					});
 				}
-				res.render("scopes", {
-					scopes: scopes
-					, clientApp: clientApp
-					, sessionCode: sessionCode
-				});
-			}
-		});
-		
-	} else {
-		res.writeHead(401, "Session expired");
-		res.end();
-	}
+			});
+		}
+	});
 	
 });
 app.get("/oauth2/do-scopes", function(req,res) {
@@ -228,20 +289,27 @@ app.get("/oauth2/do-scopes", function(req,res) {
 		return;
 	}
 	
-	sessionCode = oauth2.fixString( sessionCode );
-	
-	if ( oauth2.isLoginSessionCodeValid( sessionCode ) ) {
-		var data = oauth2.getOauth2InputBySessionLoginCode( sessionCode );
-		
-		// check if user has allowed or denied the access:
-		// if allowed - saved the requested scopes on the user for the client_id
-			// generate auth code and send send back
-		// othwerwise send back with access_denied
-		
-	} else {
-		res.writeHead(401, "Session expired");
-		res.end();
-	}
+	oauth2.getOauth2InputBySessionLoginCode( oauth2.fixString( sessionCode ), function( sessionData ) {
+		if ( sessionData == null ) {
+			res.writeHead(401, "Session expired");
+			res.end();
+		} else {
+			// check if user has allowed or denied the access:
+			if ( accessStatus == "allow" ) {
+				var authCode = oauth2.generateAuthCode( sessionData.stateObject.client_id );
+				oauth2.storeAuthCode( oauth2.fixString( authCode ), sessioData.stateObject.client_id );
+				oauth2.updateUserPrivileges(
+					req.cookies.logged_in
+					, sessionData.stateObject.client_id
+					, sessionData.stateObject.scope.split(" ") );
+				// TODO: redirect the user to the redirect_uri
+				res.writeHead(200, authCode);
+			} else if ( accessStatus == "deny" ) {
+				// TODO: redirect the user to the redirect_uri
+				res.writeHead(400, "access_denied: User denied");
+			}
+		}
+	});
 		
 });
 
@@ -271,27 +339,18 @@ app.get("/oauth2/auth", function(req,res) {
 				
 			} else {
 				var loginSessionCode = oauth2.generateLoginSessionCode(client_id);
-				oauth2.doLoginSessionCodeStorage( client_id, loginSessionCode, redirect_uri, response_type, scope, state );
+				oauth2.storeSessionLoginCode( loginSessionCode, {
+					client_id: client_id
+					, redirect_uri: redirect_uri
+					, response_type: response_type
+					, scope: scope
+					, state: state } );
 				res.redirect("/oauth2/login?ses=" + loginSessionCode);
 			}
 			
 		}
 	} );
 	
-	/*
-	var authResponse = oauth2.processAuth(
-		response_type
-		, client_id
-		, redirect_uri
-		, scope
-		, state );
-	
-	if ( redirect_uri != null ) {
-		res.header("Location", redirect_uri + "?" + qs.stringify(authResponse));
-	} else {
-		res.send( JSON.stringify( authResponse ) );
-	}
-	*/
 });
 
 app.get("/oauth2/token", function(req,res) {

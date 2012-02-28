@@ -7,38 +7,17 @@ function OAuth2Server( settings ) {
 	var __scope = this;
 	
 	this.scopes = config.scopes || [];
-	this.authCodeTimeout = config.authCodeTimeout || 60000;
-	this.loginSessionCodeTimeout = config.loginSessionCodeTimeout || 60000;
-	this.requireAllScopes = true;
+	this.expiryDefault = config.expiryDefault || 60000;
+	this.sessionLoginExpiryDefault = config.sessionLoginExpiryDefault || 60000;
 	
 	this.__$handleAuthCodeTimer = function(scope) {
-		if ( __scope.__$code_storage == null ) {
-			__scope.__$code_storage = {};
-		}
-		var runAt = (new Date()).getTime();
-		var toDelete = [];
-		for ( var key in __scope.__$code_storage ) {
-			if ( runAt - __scope.__$code_storage[key].created_at > __scope.authCodeTimeout ) {
-				toDelete.push(key);
-			}
-		}
-		for ( var i=0; i<toDelete.length; i++ ) {
-			delete __scope.__$code_storage[ key ];
+		if ( __scope.timer_authCodeHandler ) {
+			__scope.timer_authCodeHandler( (new Date()).getTime() );
 		}
 	};
 	this.__$handleSessionLoginCodeTimer = function(scope) {
-		if ( __scope.__$session_code_storage == null ) {
-			__scope.__$session_code_storage = {};
-		}
-		var runAt = (new Date()).getTime();
-		var toDelete = [];
-		for ( var key in __scope.__$session_code_storage ) {
-			if ( runAt - __scope.__$session_code_storage[key].created_at > __scope.loginSessionCodeTimeout ) {
-				toDelete.push(key);
-			}
-		}
-		for ( var i=0; i<toDelete.length; i++ ) {
-			delete __scope.__$session_code_storage[ key ];
+		if ( __scope.timer_sessionLoginCodeHandler ) {
+			__scope.timer_sessionLoginCodeHandler( (new Date()).getTime() );
 		}
 	};
 	
@@ -47,6 +26,11 @@ function OAuth2Server( settings ) {
 };
 
 // TO OVERRIDE
+OAuth2Server.prototype.timer_authCodeHandler = null;
+OAuth2Server.prototype.timer_sessionLoginCodeHandler = null;
+OAuth2Server.prototype.storeAuthCode = function( client_id ) {};
+OAuth2Server.prototype.storeSessionLoginCode = function( client_id ) {};
+OAuth2Server.prototype.getOauth2InputBySessionLoginCode = function(code, callback) {};
 OAuth2Server.prototype.accountLogin = function( client_id ) { return null };
 OAuth2Server.prototype.accountAllowedScopes = function( client_id ) { return null };
 OAuth2Server.prototype.clientIdExistsLookup = function( client_id ) { return null };
@@ -58,49 +42,6 @@ OAuth2Server.prototype.getScopeName = function(scope) {
 		if ( this.scopes[i].key == scope ) {
 			return this.scopes[i].name;
 		}
-	}
-	return null;
-};
-
-OAuth2Server.prototype.doAuthCodeStorage = function(client_id, code) {
-	if ( this.__$code_storage == null ) {
-		this.__$code_storage = {};
-	}
-	this.__$code_storage[ code ] = { client_id: client_id, created_at: (new Date()).getTime() };
-};
-
-OAuth2Server.prototype.doLoginSessionCodeStorage = function( client_id, code, redirect_uri, response_type, scope, state ) {
-	if ( this.__$session_code_storage == null ) {
-		this.__$session_code_storage = {};
-	}
-	this.__$session_code_storage[ code ] = {
-		client_id: client_id
-		, redirect_uri: redirect_uri
-		, response_type: response_type
-		, scope: scope
-		, state: state
-		, created_at: (new Date()).getTime() };
-};
-
-OAuth2Server.prototype.isLoginSessionCodeValid = function( code ) {
-	if ( this.__$session_code_storage == null ) {
-		this.__$session_code_storage = {};
-	}
-	if ( this.__$session_code_storage[ code ] != null ) {
-		this.__$session_code_storage[ code ].created_at = (new Date()).getTime();
-		return true;
-	}
-	return false;
-};
-
-OAuth2Server.prototype.getOauth2InputBySessionLoginCode = function( code ) {
-	if ( this.__$session_code_storage[ code ] != null ) {
-		this.__$session_code_storage[ code ].created_at = (new Date()).getTime();
-		var r = {};
-		for ( var key in this.__$session_code_storage[ code ] ) {
-			r[ key ] = this.__$session_code_storage[ code ][key];
-		}
-		return r;
 	}
 	return null;
 };
