@@ -79,7 +79,7 @@ function setupOAuth2Server() {
 									process.nextTick( function() {
 										mongodClient.collection("sessionLoginCodes", function( err, n_collection ) {
 											item.expires = (new Date() + item.expiresBy);
-											n_collection.update( { code: item.code, item } );
+											n_collection.update( { code: item.code }, item );
 										});
 									} );
 									callback(item);
@@ -104,15 +104,21 @@ function setupOAuth2Server() {
 				};
 				
 				oauth2.updateUserPrivileges = function( user_id, client_id, scopes ) {
-					this.getUserAccountBy( { id: user_id }, function( account ) {
+					util.puts( "Updating " + user_id + " with scopes " + scopes );
+					this.getUserAccountBy( { username: user_id }, function( account ) {
 						if ( account != null ) {
+							util.puts( "Account is not null " + account.id );
 							if ( account.authorized == null || account.authorized == undefined ) {
 								account.authorized = {};
 							}
-							account.authorized[ client_id ] = scopes;
+							if ( scopes == null ) {
+								delete account.authorized[ client_id ];
+							} else {
+								account.authorized[ client_id ] = scopes;
+							}
 							process.nextTick(function() {
 								mongodClient.collection("users", function( err, collection ) {
-									collection.update( { id: user_id }, account );
+									collection.update( { username: user_id }, account );
 								});
 							});
 						}
@@ -144,6 +150,19 @@ function setupOAuth2Server() {
 						} );
 					} );
 				};
+				oauth2.clientAppsLookup = function(client_ids, callback) {
+					mongodClient.collection("apps", function(err, collection) {
+						collection.find( { client_id: { $in: client_ids } }, function(err, cursor) {
+							cursor.toArray( function( err, arr ) {
+								if ( arr.length == 0 ) {
+									callback( null );
+								} else {
+									callback( arr );
+								}
+							} );
+						} );
+					} );
+				};
 				
 			});
 		});
@@ -163,11 +182,56 @@ app.use(express.cookieParser());
 app.use(express.bodyParser());
 
 app.get("/", function(req,res) {
-	res.render("root", { encodedUrl: encodeURIComponent("http://testoauth2:2800/oauth2callback") });
+	var authorizedApps = [];
+	var loggedIn = req.cookies.logged_in != null;
+	if ( loggedIn ) {
+		oauth2.getUserAccountBy( { username: req.cookies.logged_in }, function(account) {
+			if ( account != null ) {
+				var client_ids = [];
+				if ( account.authorized != null && account.authorized != undefined ) {
+					for ( var key in account.authorized ) {
+						client_ids.push( key );
+					}
+				}
+				oauth2.clientAppsLookup( client_ids, function( apps ) {
+					res.render("root", {
+						encodedUrl: encodeURIComponent("http://testoauth2:2800/oauth2callback")
+						, loggedIn: loggedIn
+						, authorizedApps: apps
+						, error: null
+					});
+				});
+			} else {
+				res.render("root", {
+					encodedUrl: encodeURIComponent("http://testoauth2:2800/oauth2callback")
+					, loggedIn: loggedIn
+					, authorizedApps: []
+					, error: "no_account"
+				});
+			}
+		});
+	} else {
+		res.render("root", {
+			encodedUrl: encodeURIComponent("http://testoauth2:2800/oauth2callback")
+			, loggedIn: loggedIn
+			, authorizedApps: []
+			, error: null
+		});
+	}
 });
 
 app.get("/oauth2/logout", function(req,res) {
-	res.clearCookie("logged_in");
+	res.clearCookie("logged_in", { path: "/" });
+	res.redirect("/");
+});
+
+app.get("/oauth2/deauthorize", function(req,res) {
+	if ( req.cookies.logged_in == null ) {
+		res.redirect("/oauth2/login");
+		res.end();
+		return;
+	}
+	oauth2.updateUserPrivileges( req.cookies.logged_in, req.param("client_id", null), null);
 	res.redirect("/");
 });
 
@@ -191,7 +255,7 @@ app.get("/oauth2/login", function(req,res) {
 				, error: error
 			});
 		}
-	} );
+	});
 	
 });
 
@@ -210,7 +274,7 @@ app.post("/oauth2/do-login", function(req,res) {
 			// TODO: params should be loaded from an external function
 			oauth2.getUserAccountBy( { username: req.param("username", null), password: req.param("password", null) }, function( account ) {
 				if ( account != null ) {
-					res.cookie("logged_in", account.username);
+					res.cookie("logged_in", account.username, { path: "/" });
 					res.redirect( "/oauth2/scopes?ses=" + oauth2.fixString( sessionCode ) );
 				} else {
 					res.cookie( "error", "Could not log you in." );
@@ -270,7 +334,7 @@ app.get("/oauth2/scopes", function(req,res) {
 	});
 	
 });
-app.get("/oauth2/do-scopes", function(req,res) {
+app.post("/oauth2/do-scopes", function(req,res) {
 	
 	if ( req.cookies.logged_in == null ) {
 		res.redirect("/oauth2/login");
@@ -296,17 +360,20 @@ app.get("/oauth2/do-scopes", function(req,res) {
 		} else {
 			// check if user has allowed or denied the access:
 			if ( accessStatus == "allow" ) {
+				util.puts("Access allowed");
 				var authCode = oauth2.generateAuthCode( sessionData.stateObject.client_id );
-				oauth2.storeAuthCode( oauth2.fixString( authCode ), sessioData.stateObject.client_id );
+				oauth2.storeAuthCode( oauth2.fixString( authCode ), sessionData.stateObject.client_id );
 				oauth2.updateUserPrivileges(
 					req.cookies.logged_in
 					, sessionData.stateObject.client_id
 					, sessionData.stateObject.scope.split(" ") );
 				// TODO: redirect the user to the redirect_uri
 				res.writeHead(200, authCode);
+				res.end();
 			} else if ( accessStatus == "deny" ) {
 				// TODO: redirect the user to the redirect_uri
 				res.writeHead(400, "access_denied: User denied");
+				res.end();
 			}
 		}
 	});
@@ -330,14 +397,10 @@ app.get("/oauth2/auth", function(req,res) {
 			res.end();
 		} else {
 			
-			if ( req.cookies.logged_in != null ) {
+			util.puts("Hai: " + req.cookies.logged_in);
+			
+			if ( req.cookies.logged_in == undefined ) {
 				
-				// get account by user id:
-				// check if the user authorized the app and all scopes requested
-					// if true - generate the code and send back
-					// otherwise - show scopes page
-				
-			} else {
 				var loginSessionCode = oauth2.generateLoginSessionCode(client_id);
 				oauth2.storeSessionLoginCode( loginSessionCode, {
 					client_id: client_id
@@ -346,6 +409,40 @@ app.get("/oauth2/auth", function(req,res) {
 					, scope: scope
 					, state: state } );
 				res.redirect("/oauth2/login?ses=" + loginSessionCode);
+				
+			} else {
+				
+				oauth2.getUserAccountBy( { username: req.cookies.logged_in }, function( account ) {
+					if ( account != null ) {
+						if ( account.authorized == null || account.authorized == undefined ) {
+							account.authorized = {};
+						}
+						if ( account.authorized[ client_id ] == null || account.authorized[ client_id ] == undefined ) {
+							var loginSessionCode = oauth2.generateLoginSessionCode(client_id);
+							oauth2.storeSessionLoginCode( loginSessionCode, {
+								client_id: client_id
+								, redirect_uri: redirect_uri
+								, response_type: response_type
+								, scope: scope
+								, state: state } );
+							res.redirect("/oauth2/scopes?ses=" + loginSessionCode);
+						} else {
+							var authCode = oauth2.generateAuthCode( client_id );
+							oauth2.storeAuthCode( oauth2.fixString( authCode ), client_id );
+							// TODO: redirect the user to the redirect_uri
+							res.writeHead(200, authCode);
+							res.end();
+						}
+					} else {
+						res.writeHead(400, "unauthorized_client: invalid account");
+						res.end();
+					}
+				});
+				
+				// get account by user id:
+				// check if the user authorized the app and all scopes requested
+					// if true - generate the code and send back
+					// otherwise - show scopes page
 			}
 			
 		}

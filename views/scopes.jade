@@ -9,7 +9,7 @@ body
 	form(action='/oauth2/do-scopes', method='post')
 		input(type='hidden', name='access_status', value='allow')
 		input(type='hidden', name='ses', value='#{sessionCode}')
-		input(type='button', value='Allow access')
+		input(type='submit', value='Allow access')
 	form(action='/oauth2/do-scopes', method='post')
 		input(type='hidden', name='access_status', value='deny')
 		input(type='hidden', name='ses', value='#{sessionCode}')

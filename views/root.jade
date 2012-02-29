@@ -2,4 +2,19 @@ html
 head
 	title OAuth2 test app
 body
-	a(href="http://localhost:3000/oauth2/auth?response_type=code&client_id=O0-rdIQGiKqihdwE9-DqudbWY&redirect_uri=#{encodedUrl}&scope=read edit new account") do a test
+	if ( loggedIn == true )
+		if ( error != null )
+			p Error while fetching your account: #{error}
+		else
+			if authorizedApps
+				p Here's your account mate, there are following authorized apps:
+				ul
+					each app in authorizedApps
+						li #{app.name} 
+							a(href="/oauth2/deauthorize?client_id=#{app.client_id}") Remove access
+			else
+				p Here's your account mate. You don't have any apps authorized yet.
+			p
+				a(href="/oauth2/logout") Logout
+	else
+		a(href="http://localhost:3000/oauth2/auth?response_type=code&client_id=O0-rdIQGiKqihdwE9-DqudbWY&redirect_uri=#{encodedUrl}&scope=read edit new account") do a test
