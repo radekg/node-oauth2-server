@@ -1,5 +1,6 @@
 var util = require("util")
-	, hash = require("jshashes");
+	, hash = require("jshashes")
+	, url = require("url");
 
 function OAuth2Server( settings ) {
 	
@@ -46,55 +47,81 @@ OAuth2Server.prototype.getScopeName = function(scope) {
 	return null;
 };
 
-OAuth2Server.prototype.processLookup = function(response_type, client_id, scope, state) {
-	var resp = {};
-	if ( response_type == null ) {
-		resp.error = "invalid_request";
-		resp.error_description = "Parameter response_type not given.";
-		if ( state != null ) {
-			resp.state = state;
+OAuth2Server.prototype.sendResponse = function( stateObject, data, response ) {
+	if ( stateObject.redirect_uri != null ) {
+		var _url = stateObject.redirect_uri + "?";
+		for ( var key in data ) {
+			_url += key + "=" + dataObject[key] + "&";
 		}
-		return resp;
-	}
-	
-	if ( client_id == null ) {
-		resp.error = "invalid_request";
-		resp.error_description = "Parameter client_id not given.";
-		if ( state != null ) {
-			resp.state = state;
+		if ( stateObject.state != null ) {
+			_url += "state=" + stateObject.state;
 		}
-		return resp;
-	}
-	
-	if ( response_type !== "code" ) {
-		resp.error = "invalid_request";
-		resp.error_description = "Parameter response_type has a wrong value.";
-		if ( state != null ) {
-			resp.state = state;
-		}
-		return resp;
-	}
-	
-	if ( this.clientIdExistsLookup( client_id ) != null ) {
-		
-		resp.scope = scope;
-		resp.state = state;
-		// 
-		/*
-		resp.code = this.generateAuthCode( client_id );
-		this.doAuthCodeStorage( client_id, resp.code );
-		if ( state != null ) {
-			resp.state = state;
-		}
-		return resp;
-		*/
-		
-		
+		response.redirect(_url);
 	} else {
-		resp.error = "unauthorized_client";
+		response.writeHead(200, JSON.stringify( data ));
+	}
+}
+
+OAuth2Server.prototype.sendErrorResponse = function( stateObject, errorObject, response ) {
+	if ( stateObject.redirect_uri != null ) {
+		var _url = stateObject.redirect_uri + "?";
+		for ( var key in errorObject ) {
+			_url += key + "=" + errorObject[key] + "&";
+		}
+		if ( stateObject.state != null ) {
+			_url += "state=" + stateObject.state;
+		}
+		response.redirect(_url);
+	} else {
+		response.writeHead(400, errorObject.error + ": " + errorObject.error_description);
+	}
+}
+
+OAuth2Server.prototype.validateAuthRequest = function(stateObject, referer) {
+	var resp = {};
+	if ( stateObject.response_type == null ) {
+		resp.error = "invalid_request";
+		resp.error_description = "Parameter response_type required.";
 		return resp;
 	}
+	if ( stateObject.response_type !== "code" ) {
+		resp.error = "invalid_request";
+		resp.error_description = "Parameter response_type must be 'code'. Other values currently unsupported.";
+		return resp;
+	}
+	if ( stateObject.client_id == null ) {
+		resp.error = "invalid_request";
+		resp.error_description = "Parameter client_id required.";
+		return resp;
+	}
+	if ( stateObject.redirect_uri != null ) {
+		var parsedUri = url.parse( stateObject.redirect_uri );
+		var parsedReferer = null;
+		if ( typeof(referer) == "string" ) {
+			parsedReferer = url.parse( referer )
+		}
+		if ( parsedUri.hostname !== parsedReferer.hostname ) {
+			resp.error = "invalid_request";
+			resp.error_description = "Can't redirect to unauthorized URI.";
+			return resp;
+		}
+	} else {
+		// lookup app details to see if the uri stored on the app settings
+		// and compare those...
+	}
 	
+	var requestedScopes = stateObject.scope.split(" ");
+	var scopes = [];
+	for ( var i=0; i<requestedScopes.length; i++ ) {
+		var aScopeName = this.getScopeName( requestedScopes[i] );
+		if ( aScopeName == null ) {
+			resp.error = "invalid_scope";
+			resp.error_description = requestedScopes[i];
+			return resp ;
+		}
+	}
+	
+	return resp;
 }
 OAuth2Server.prototype.generateLoginSessionCode = function( client_id ) {
 	var code = new hash.SHA1().b64( (new Date()).toString() + Math.random() + client_id + this.randomString(50) );

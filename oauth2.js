@@ -45,7 +45,6 @@ mongodClient.open(function(err, p_client) {
 
 var oauth2 = null;
 function setupOAuth2Server() {
-	util.puts("Setting up OAuth2, connected to mongod, reading scopes for this app");
 	mongodClient.collection("scopes", function(err, collection) {
 		collection.find({}, function(err, cursor) {
 			cursor.toArray( function(err, arr) {
@@ -271,7 +270,6 @@ app.post("/oauth2/do-login", function(req,res) {
 			res.writeHead(401, "Session expired " + oauth2.fixString( sessionCode ) );
 			res.end();
 		} else {
-			// TODO: params should be loaded from an external function
 			oauth2.getUserAccountBy( { username: req.param("username", null), password: req.param("password", null) }, function( account ) {
 				if ( account != null ) {
 					res.cookie("logged_in", account.username, { path: "/" });
@@ -306,22 +304,13 @@ app.get("/oauth2/scopes", function(req,res) {
 		} else {
 			oauth2.clientIdLookup( sessionData.stateObject.client_id, function(clientApp) {
 				if ( clientApp == null ) {
-					res.writeHead(400, "Client ID invalid");
+					res.writeHead(400, "invalid_request: Client ID invalid");
 					res.end();
 				} else {
-
 					var requestedScopes = sessionData.stateObject.scope.split(" ");
 					var scopes = [];
 					for ( var i=0; i<requestedScopes.length; i++ ) {
-						var aScopeName = oauth2.getScopeName( requestedScopes[i] );
-						if ( aScopeName == null ) {
-							// TODO: if redirect_uri specified, send back
-							res.writeHead(400, "invalid_scope: " + requestedScopes[i]);
-							res.end();
-							return;
-						} else {
-							scopes.push( { scope: requestedScopes[i], name: aScopeName } );
-						}
+						scopes.push( { scope: requestedScopes[i], name: oauth2.getScopeName( requestedScopes[i] ) } );
 					}
 					res.render("scopes", {
 						scopes: scopes
@@ -360,7 +349,6 @@ app.post("/oauth2/do-scopes", function(req,res) {
 		} else {
 			// check if user has allowed or denied the access:
 			if ( accessStatus == "allow" ) {
-				util.puts("Access allowed");
 				var authCode = oauth2.generateAuthCode( sessionData.stateObject.client_id );
 				oauth2.storeAuthCode( oauth2.fixString( authCode ), sessionData.stateObject.client_id );
 				oauth2.updateUserPrivileges(
@@ -368,11 +356,22 @@ app.post("/oauth2/do-scopes", function(req,res) {
 					, sessionData.stateObject.client_id
 					, sessionData.stateObject.scope.split(" ") );
 				// TODO: redirect the user to the redirect_uri
-				res.writeHead(200, authCode);
-				res.end();
+				
+				if ( sessionData.stateObject.redirect_uri != null ) {
+					var _url = sessionData.stateObject.redirect_uri + "?";
+					if ( sessionData.stateObject.state != null ) {
+						_url += "&state=" + state;
+					}
+					_url += "&code=" + authCode;
+					res.redirect( _url );
+					res.end()
+				} else {
+					oauth2.sendResponse( sessionData.stateObject, { code: authCode }, res );
+					res.end();
+				}
+				
 			} else if ( accessStatus == "deny" ) {
-				// TODO: redirect the user to the redirect_uri
-				res.writeHead(400, "access_denied: User denied");
+				oauth2.sendErrorResponse( sessionData.stateObject, { error: "access_denied", error_description: "User denied." }, res );
 				res.end();
 			}
 		}
@@ -382,67 +381,55 @@ app.post("/oauth2/do-scopes", function(req,res) {
 
 app.get("/oauth2/auth", function(req,res) {
 	
-	var redirect_uri = req.param("redirect_uri", null);
-	var response_type = req.param("response_type", null);
-	var client_id = req.param("client_id", null);
-	var scope = req.param("scope", null);
-	var state = req.param("state", null);
+	util.puts( "--------------------------------------------" );
+	util.puts( "Referer is: " + req.header("Referer") );
+	util.puts( "--------------------------------------------" );
 	
-	if ( client_id != null ) client_id = oauth2.fixString( client_id );
+	var stateObject = {
+		client_id: req.param("client_id", null)
+		, redirect_uri: req.param("redirect_uri", null)
+		, response_type: req.param("response_type", null)
+		, scope: req.param("scope", null)
+		, state: req.param("state", null) };
+	var validationStatus = oauth2.validateAuthRequest( stateObject, req.header("Referer") );
+	if ( validationStatus.error != null ) {
+		oauth2.sendErrorResponse( stateObject, validationStatus, res );
+		res.end();
+		return;
+	}
 	
-	oauth2.clientIdLookup( client_id, function(clientApp) {
+	stateObject.client_id = oauth2.fixString( stateObject.client_id );
+	
+	oauth2.clientIdLookup( stateObject.client_id, function(clientApp) {
 		if ( clientApp == null ) {
-			// TODO: if redirect_uri specified, send back
-			res.writeHead(400, "unauthorized_client: Client ID invalid");
+			oauth2.sendErrorResponse( stateObject, { error: "unauthorized_client", error_description: "Client ID invalid" }, res );
 			res.end();
 		} else {
-			
-			util.puts("Hai: " + req.cookies.logged_in);
-			
 			if ( req.cookies.logged_in == undefined ) {
-				
-				var loginSessionCode = oauth2.generateLoginSessionCode(client_id);
-				oauth2.storeSessionLoginCode( loginSessionCode, {
-					client_id: client_id
-					, redirect_uri: redirect_uri
-					, response_type: response_type
-					, scope: scope
-					, state: state } );
+				var loginSessionCode = oauth2.generateLoginSessionCode(stateObject.client_id);
+				oauth2.storeSessionLoginCode( loginSessionCode, stateObject );
 				res.redirect("/oauth2/login?ses=" + loginSessionCode);
-				
 			} else {
-				
 				oauth2.getUserAccountBy( { username: req.cookies.logged_in }, function( account ) {
 					if ( account != null ) {
 						if ( account.authorized == null || account.authorized == undefined ) {
 							account.authorized = {};
 						}
-						if ( account.authorized[ client_id ] == null || account.authorized[ client_id ] == undefined ) {
-							var loginSessionCode = oauth2.generateLoginSessionCode(client_id);
-							oauth2.storeSessionLoginCode( loginSessionCode, {
-								client_id: client_id
-								, redirect_uri: redirect_uri
-								, response_type: response_type
-								, scope: scope
-								, state: state } );
+						if ( account.authorized[ stateObject.client_id ] == null || account.authorized[ stateObject.client_id ] == undefined ) {
+							var loginSessionCode = oauth2.generateLoginSessionCode(stateObject.client_id);
+							oauth2.storeSessionLoginCode( loginSessionCode, stateObject );
 							res.redirect("/oauth2/scopes?ses=" + loginSessionCode);
 						} else {
-							var authCode = oauth2.generateAuthCode( client_id );
-							oauth2.storeAuthCode( oauth2.fixString( authCode ), client_id );
-							// TODO: redirect the user to the redirect_uri
-							res.writeHead(200, authCode);
+							var authCode = oauth2.generateAuthCode( stateObject.client_id );
+							oauth2.storeAuthCode( oauth2.fixString( authCode ), stateObject.client_id );
+							oauth2.sendResponse( stateObject, { code: authCode }, res )
 							res.end();
 						}
 					} else {
-						res.writeHead(400, "unauthorized_client: invalid account");
+						oauth2.sendErrorResponse( stateObject, { error: "unauthorized_client", error_description: "Spoofed account." }, res );
 						res.end();
 					}
 				});
-				
-				// get account by user id:
-				// check if the user authorized the app and all scopes requested
-					// if true - generate the code and send back
-					// otherwise - show scopes page
 			}
 			
 		}
