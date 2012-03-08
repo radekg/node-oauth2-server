@@ -56,6 +56,9 @@ OAuth2Server.prototype.sendResponse = function( stateObject, data, response ) {
 		if ( stateObject.state != null ) {
 			_url += "state=" + stateObject.state;
 		}
+		if ( _url[ _url.length -1 ] == "&" ) {
+			_url = _url.substr( 0, _url.length - 1 );
+		}
 		response.redirect(_url);
 	} else {
 		response.writeHead(200, JSON.stringify( data ));
@@ -70,6 +73,9 @@ OAuth2Server.prototype.sendErrorResponse = function( stateObject, errorObject, r
 		}
 		if ( stateObject.state != null ) {
 			_url += "state=" + stateObject.state;
+		}
+		if ( _url[ _url.length -1 ] == "&" ) {
+			_url = _url.substr( 0, _url.length - 1 );
 		}
 		response.redirect(_url);
 	} else {
@@ -100,9 +106,15 @@ OAuth2Server.prototype.validateAuthRequest = function(stateObject, referer) {
 		if ( typeof(referer) == "string" ) {
 			parsedReferer = url.parse( referer )
 		}
-		if ( parsedUri.hostname !== parsedReferer.hostname ) {
+		if ( parsedReferer && parsedReferer.hostname ) {
+			if ( parsedUri.hostname !== parsedReferer.hostname ) {
+				resp.error = "invalid_request";
+				resp.error_description = "Can't redirect to unauthorized URI.";
+				return resp;
+			}
+		} else {
 			resp.error = "invalid_request";
-			resp.error_description = "Can't redirect to unauthorized URI.";
+			resp.error_description = "Can't verify the origin of this request.";
 			return resp;
 		}
 	} else {
@@ -123,6 +135,52 @@ OAuth2Server.prototype.validateAuthRequest = function(stateObject, referer) {
 	
 	return resp;
 }
+
+
+OAuth2Server.prototype.validateTokenRequest = function(stateObject) {
+	var resp = {};
+	if ( stateObject.grant_type == null ) {
+		resp.error = "invalid_request";
+		resp.error_description = "Grant type not specified.";
+		return resp;
+	}
+	if ( stateObject.grant_type !== "authorization_code" && stateObject.grant_type !== "refresh_token" ) {
+		resp.error = "unsupported_grant_type";
+		resp.error_description = "Parameter grant_type must be 'authorization_code' or 'refresh_token'. Other values currently unsupported.";
+		return resp;
+	}
+	if ( stateObject.grant_type === "authorization_code" ) {
+		if ( stateObject.code == null ) {
+			resp.error = "invalid_request";
+			resp.error_description = "Parameter code required.";
+			return resp;
+		}
+		if ( stateObject.redirect_uri == null ) {
+			resp.error = "invalid_request";
+			resp.error_description = "Parameter redirect_uri required.";
+			return resp;
+		}
+	}
+	if ( stateObject.client_id == null ) {
+		resp.error = "invalid_request";
+		resp.error_description = "Parameter client_id required.";
+		return resp;
+	}
+	if ( stateObject.client_secret == null ) {
+		resp.error = "invalid_request";
+		resp.error_description = "Parameter client_secret required.";
+		return resp;
+	}
+	
+	return resp;
+}
+
+OAuth2Server.prototype.generateRefreshToken = function( client_id ) {
+	return this.generateLoginSessionCode();
+};
+OAuth2Server.prototype.generateAuthToken = function( client_id ) {
+	return this.generateLoginSessionCode();
+};
 OAuth2Server.prototype.generateLoginSessionCode = function( client_id ) {
 	var code = new hash.SHA1().b64( (new Date()).toString() + Math.random() + client_id + this.randomString(50) );
 	return code;

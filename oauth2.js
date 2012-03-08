@@ -52,13 +52,27 @@ function setupOAuth2Server() {
 				util.puts( " -> OAuth2 server initialized with scopes: " + JSON.stringify( arr ) );
 				
 				oauth2 = new OAuth2Server({ scopes: arr });
-				oauth2.storeAuthCode = function( code, client_id, expiry ) {
+				oauth2.storeAuthCode = function( code, state, expiry ) {
 					if ( typeof expiry != "number" ) {
 						expiry = oauth2.expiryDefault;
 					}
 					var expiryDate = new Date( (new Date()).getTime() + expiry );
 					mongodClient.collection("authCodes", function(err, collection) {
-						collection.insert( { auth_code: code, client_id: client_id, expiries: expiryDate.getTime() } );
+						collection.insert( { auth_code: code, state: state, expiries: expiryDate.getTime() } );
+					});
+				};
+				oauth2.getOAuth2InputByAuthCode = function( code, callback ) {
+					mongodClient.collection("authCodes", function(err,collection) {
+						collection.find( { auth_code: code }, function( err, cursor ) {
+							cursor.toArray( function(err, arr) {
+								if ( arr.length == 0 ) {
+									callback( null );
+								} else {
+									var item = arr[0];
+									callback(item.state);
+								}
+							} );
+						} );
 					});
 				};
 				oauth2.timer_authCodeHandler = function( runAt ) {
@@ -103,7 +117,6 @@ function setupOAuth2Server() {
 				};
 				
 				oauth2.updateUserPrivileges = function( user_id, client_id, scopes ) {
-					util.puts( "Updating " + user_id + " with scopes " + scopes );
 					this.getUserAccountBy( { username: user_id }, function( account ) {
 						if ( account != null ) {
 							util.puts( "Account is not null " + account.id );
@@ -122,6 +135,22 @@ function setupOAuth2Server() {
 							});
 						}
 					} );
+				};
+				oauth2.assignUserOAuth2Session = function( user_id, auth_code, client_id ) {
+					mongodClient.collection("oauth2Sessions", function(err, collection) {
+						collection.find( { user_id: user_id, client_id: client_id }, function( err, cursor ) {
+							cursor.toArray( function(err, arr) {
+								if ( arr.length == 0 ) {
+									var refreshToken = oauth2.generateRefreshToken( client_id );
+									collection.insert( { user_id: user_id, auth_code: auth_code, client_id: client_id, refresh_token: refreshToken } );
+								} else {
+									var item = arr[0];
+									item.auth_code = auth_code;
+									collection.update( { user_id: user_id, client_id: client_id }, item );
+								}
+							} );
+						} );
+					});
 				};
 				oauth2.getUserAccountBy = function( params, callback ) {
 					mongodClient.collection("users", function(err, collection) {
@@ -162,6 +191,7 @@ function setupOAuth2Server() {
 						} );
 					} );
 				};
+				
 				
 			});
 		});
@@ -350,12 +380,15 @@ app.post("/oauth2/do-scopes", function(req,res) {
 			// check if user has allowed or denied the access:
 			if ( accessStatus == "allow" ) {
 				var authCode = oauth2.generateAuthCode( sessionData.stateObject.client_id );
-				oauth2.storeAuthCode( oauth2.fixString( authCode ), sessionData.stateObject.client_id );
+				oauth2.storeAuthCode( oauth2.fixString( authCode ), sessionData.stateObject );
 				oauth2.updateUserPrivileges(
 					req.cookies.logged_in
 					, sessionData.stateObject.client_id
 					, sessionData.stateObject.scope.split(" ") );
-				// TODO: redirect the user to the redirect_uri
+				oauth2.assignUserOAuth2Session(
+					req.cookies.logged_in
+					, oauth2.fixString( authCode )
+					, sessionData.stateObject.client_id );
 				
 				if ( sessionData.stateObject.redirect_uri != null ) {
 					var _url = sessionData.stateObject.redirect_uri + "?";
@@ -380,10 +413,6 @@ app.post("/oauth2/do-scopes", function(req,res) {
 });
 
 app.get("/oauth2/auth", function(req,res) {
-	
-	util.puts( "--------------------------------------------" );
-	util.puts( "Referer is: " + req.header("Referer") );
-	util.puts( "--------------------------------------------" );
 	
 	var stateObject = {
 		client_id: req.param("client_id", null)
@@ -421,7 +450,7 @@ app.get("/oauth2/auth", function(req,res) {
 							res.redirect("/oauth2/scopes?ses=" + loginSessionCode);
 						} else {
 							var authCode = oauth2.generateAuthCode( stateObject.client_id );
-							oauth2.storeAuthCode( oauth2.fixString( authCode ), stateObject.client_id );
+							oauth2.storeAuthCode( oauth2.fixString( authCode ), stateObject );
 							oauth2.sendResponse( stateObject, { code: authCode }, res )
 							res.end();
 						}
@@ -437,7 +466,80 @@ app.get("/oauth2/auth", function(req,res) {
 	
 });
 
-app.get("/oauth2/token", function(req,res) {
+app.post("/oauth2/token", function(req,res) {
+	var stateObject = {
+		grant_type: req.param("grant_type", null)
+		, client_id: req.param("client_id", null)
+		, client_secret: req.param("client_secret", null)
+		, code: req.param("code", null)
+		, redirect_uri: req.param("code", null) };
+	var validationStatus = oauth2.validateTokenRequest( stateObject, req.header("Referer") );
+	if ( validationStatus.error != null ) {
+		oauth2.sendErrorResponse( stateObject, validationStatus, res );
+		res.end();
+		return;
+	}
+	
+	// if grant_type is authorization_code
+	if ( stateObject.grant_type === "authorization_code" ) {
+		oauth2.getOAuth2InputByAuthCode( stateObjetc.code, function( authStateObject ) {
+			if ( authStateObject == null ) {
+				oauth2.sendErrorMessage( sessionData.stateObject, { error: "invalid_request", error_description: "Auth code invalid or expired." }, res );
+			} else {
+				if ( sessionData.client_id !== authStateObject.client_id ) {
+					oauth2.sendErrorMessage( sessionData.stateObject, { error: "invalid_request", error_description: "Auth code client ID not matched." }, res );
+				} else {
+					if ( sessionData.redirect_uri !== authStateObject.redirect_uri ) {
+						oauth2.sendErrorMessage( sessionData.stateObject, { error: "invalid_request", error_description: "Auth code redirect URI not matched." }, res );
+					} else {
+						oauth2.clientIdLookup( sessionData.client_id, function( app ) {
+							if ( app == null ) {
+								oauth2.sendErrorMessage( sessionData.stateObject, { error: "invalid_request", error_description: "Client ID is invalid." }, res );
+							} else {
+								if ( sessionData.client_secret !== app.client_id ) {
+									oauth2.sendErrorMessage( sessionData.stateObject, { error: "invalid_request", error_description: "Client secret is invalid." }, res );
+								} else {
+									
+									// check if auth_code isn't expired
+									//  -> if expired
+									//   -> error
+									//  -> if not expired:
+									//   -> get session by auth_code
+									//    -> if session found:
+									//     -> generate authorization_token regardless of one already existing there, set it to expire in XXX and update session
+									//     -> remove access_code from the session so it can't be reused
+									//     -> send the success response
+									//    -> session not found:
+									//     -> error
+									
+								}
+							}
+						} );
+					}
+				}
+			}
+		} );
+	} else if ( stateObject.grant_type === "refresh_token" ) {
+		
+		oauth2.clientIdLookup( sessionData.client_id, function( app ) {
+			if ( app == null ) {
+				oauth2.sendErrorMessage( sessionData.stateObject, { error: "invalid_client", error_description: "Client ID is invalid." }, res );
+			} else {
+				if ( sessionData.client_secret !== app.client_id ) {
+					oauth2.sendErrorMessage( sessionData.stateObject, { error: "invalid_client", error_description: "Client secret is invalid." }, res );
+				} else {
+					
+					// find user session by refresh token:
+					//  -> if found, check if the token exists and check if it expired
+					//   -> if that's the case, generate new access token and send it
+					//   -> update the session with new token
+					// -> otherwise, error, token has to expire first
+					// if no session found - error
+					
+				}
+			}
+		} );
+	}
 	
 });
 
