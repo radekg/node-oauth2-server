@@ -1,6 +1,6 @@
 html
 head
-	title OAuth2 test app
+	title Your account
 body
 	if ( loggedIn == true )
 		if ( error != null )
@@ -11,10 +11,10 @@ body
 				ul
 					each app in authorizedApps
 						li #{app.name} 
-							a(href="/oauth2/deauthorize?client_id=#{app.client_id}") Remove access
+							a(href="/oauth2/deauth?client_id=#{app.client_id}") Remove access
 			else
 				p Here's your account mate. You don't have any apps authorized yet.
 			p
 				a(href="/oauth2/logout") Logout
 	else
-		a(href="http://localhost:3000/oauth2/auth?response_type=code&client_id=O0-rdIQGiKqihdwE9-DqudbWY&redirect_uri=#{encodedUrl}&scope=read edit new account") do a test
+		p You're not signed in.

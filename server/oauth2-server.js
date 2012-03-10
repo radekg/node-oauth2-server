@@ -8,33 +8,40 @@ function OAuth2Server( settings ) {
 	var __scope = this;
 	
 	this.scopes = config.scopes || [];
+	this.storageAdapter = config.storageAdapter || null;
+	this.webAdapter = config.webAdapter || null;
 	this.expiryDefault = config.expiryDefault || 60000;
 	this.sessionLoginExpiryDefault = config.sessionLoginExpiryDefault || 60000;
 	
+	if ( this.storageAdapter ) {
+		this.storageAdapter.oauth2Server = this;
+	}
+	if ( this.webAdapter ) {
+		this.webAdapter.oauth2Server = this;
+	}
+	
 	this.__$handleAuthCodeTimer = function(scope) {
-		if ( __scope.timer_authCodeHandler ) {
-			__scope.timer_authCodeHandler( (new Date()).getTime() );
+		if ( __scope.storageAdapter && __scope.storageAdapter.timer_authCodeHandler ) {
+			__scope.storageAdapter.timer_authCodeHandler( (new Date()).getTime() );
 		}
 	};
 	this.__$handleSessionLoginCodeTimer = function(scope) {
-		if ( __scope.timer_sessionLoginCodeHandler ) {
-			__scope.timer_sessionLoginCodeHandler( (new Date()).getTime() );
+		if ( __scope.storageAdapter && __scope.storageAdapter.timer_sessionLoginCodeHandler ) {
+			__scope.storageAdapter.timer_sessionLoginCodeHandler( (new Date()).getTime() );
 		}
 	};
 	
 	this.__$expireAuthCodeTimer = setInterval( __scope.__$handleAuthCodeTimer, 5000 );
 	this.__$expireSessionLoginCodeTimer = setInterval( __scope.__$handleSessionLoginCodeTimer, 5000 );
 };
-
-// TO OVERRIDE
-OAuth2Server.prototype.timer_authCodeHandler = null;
-OAuth2Server.prototype.timer_sessionLoginCodeHandler = null;
-OAuth2Server.prototype.storeAuthCode = function( client_id ) {};
-OAuth2Server.prototype.storeSessionLoginCode = function( client_id ) {};
-OAuth2Server.prototype.getOauth2InputBySessionLoginCode = function(code, callback) {};
-OAuth2Server.prototype.accountLogin = function( client_id ) { return null };
-OAuth2Server.prototype.accountAllowedScopes = function( client_id ) { return null };
-OAuth2Server.prototype.clientIdExistsLookup = function( client_id ) { return null };
+OAuth2Server.prototype.start = function( onSuccess, onFault ) {
+	if ( this.storageAdapter ) {
+		this.storageAdapter.connect( onSuccess, onFault );
+	} else {
+		onFault("No storage adapter assigned, can't proceed.");
+	}
+	return this;
+};
 
 // INTERNALS:
 
@@ -51,7 +58,7 @@ OAuth2Server.prototype.sendResponse = function( stateObject, data, response ) {
 	if ( stateObject.redirect_uri != null ) {
 		var _url = stateObject.redirect_uri + "?";
 		for ( var key in data ) {
-			_url += key + "=" + dataObject[key] + "&";
+			_url += key + "=" + data[key] + "&";
 		}
 		if ( stateObject.state != null ) {
 			_url += "state=" + stateObject.state;
@@ -63,6 +70,13 @@ OAuth2Server.prototype.sendResponse = function( stateObject, data, response ) {
 	} else {
 		response.writeHead(200, JSON.stringify( data ));
 	}
+}
+
+OAuth2Server.prototype.sendBodyResponse = function( data, response ) {
+	var respData = JSON.stringify( data );
+	response.writeHead( 200 )
+	response.write(respData);
+	response.end();
 }
 
 OAuth2Server.prototype.sendErrorResponse = function( stateObject, errorObject, response ) {
@@ -81,6 +95,15 @@ OAuth2Server.prototype.sendErrorResponse = function( stateObject, errorObject, r
 	} else {
 		response.writeHead(400, errorObject.error + ": " + errorObject.error_description);
 	}
+}
+
+OAuth2Server.prototype.sendBodyErrorResponse = function( data, res, statusCode ) {
+	if ( statusCode == null || statusCode == undefined ) {
+		statusCode = 400;
+	}
+	var respData = JSON.stringify( data );
+	res.writeHead(statusCode);
+	res.end( respData );
 }
 
 OAuth2Server.prototype.validateAuthRequest = function(stateObject, referer) {
@@ -112,11 +135,11 @@ OAuth2Server.prototype.validateAuthRequest = function(stateObject, referer) {
 				resp.error_description = "Can't redirect to unauthorized URI.";
 				return resp;
 			}
-		} else {
+		}/* else {
 			resp.error = "invalid_request";
 			resp.error_description = "Can't verify the origin of this request.";
 			return resp;
-		}
+		}*/
 	} else {
 		// lookup app details to see if the uri stored on the app settings
 		// and compare those...
@@ -155,9 +178,15 @@ OAuth2Server.prototype.validateTokenRequest = function(stateObject) {
 			resp.error_description = "Parameter code required.";
 			return resp;
 		}
-		if ( stateObject.redirect_uri == null ) {
+		/*if ( stateObject.redirect_uri == null ) {
 			resp.error = "invalid_request";
 			resp.error_description = "Parameter redirect_uri required.";
+			return resp;
+		}*/
+	} else if ( stateObject.grant_type === "refresh_token" ) {
+		if ( stateObject.refresh_token == null ) {
+			resp.error = "invalid_request";
+			resp.error_description = "Parameter refresh_token required.";
 			return resp;
 		}
 	}

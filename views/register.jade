@@ -1,0 +1,15 @@
+html
+head
+	title Register
+body
+	form(action='/oauth2/register', method='post')
+		if ( error != null )
+			p There was an error: #{error}
+		input(type='hidden', name='anti_forgery', value='#{anti_forgery}')
+		p Username:
+			input(type='text', name='username')
+		p Password:
+			input(type='password', name='password')
+		p Email:
+			input(type='text', name='email')
+		input(type='submit', value='Sign up')
