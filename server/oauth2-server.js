@@ -12,6 +12,7 @@ function OAuth2Server( settings ) {
 	this.webAdapter = config.webAdapter || null;
 	this.expiryDefault = config.expiryDefault || 60000;
 	this.sessionLoginExpiryDefault = config.sessionLoginExpiryDefault || 60000;
+	this.verifyFullRedirectUri = config.verifyFullRedirectUri || false;
 	
 	if ( this.storageAdapter ) {
 		this.storageAdapter.oauth2Server = this;
@@ -22,12 +23,12 @@ function OAuth2Server( settings ) {
 	
 	this.__$handleAuthCodeTimer = function(scope) {
 		if ( __scope.storageAdapter && __scope.storageAdapter.timer_authCodeHandler ) {
-			__scope.storageAdapter.timer_authCodeHandler( (new Date()).getTime() );
+			__scope.storageAdapter.timer_authCodeHandler( new Date() );
 		}
 	};
 	this.__$handleSessionLoginCodeTimer = function(scope) {
 		if ( __scope.storageAdapter && __scope.storageAdapter.timer_sessionLoginCodeHandler ) {
-			__scope.storageAdapter.timer_sessionLoginCodeHandler( (new Date()).getTime() );
+			__scope.storageAdapter.timer_sessionLoginCodeHandler( new Date() );
 		}
 	};
 	

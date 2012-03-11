@@ -82,11 +82,11 @@ StorageAdapterMongoDB.prototype.load_scopes = function( adapter, onSuccess, onFa
 
 StorageAdapterMongoDB.prototype.storeAuthCode = function( code, state, expiry ) {
 	if ( !expiry ) {
-		expiry = 60000;
+		expiry = 300000;
 	}
 	var expiryDate = new Date( (new Date()).getTime() + expiry );
 	this.mongodClient.collection("authCodes", function(err, collection) {
-		collection.insert( { auth_code: code, state: state, expires: expiryDate.getTime() } );
+		collection.insert( { auth_code: code, state: state, expires: expiryDate } );
 	});
 };
 StorageAdapterMongoDB.prototype.getOAuth2InputByAuthCode = function( code, callback ) {
@@ -112,7 +112,7 @@ StorageAdapterMongoDB.prototype.getOauth2InputBySessionLoginCode = function( cod
 			} else {
 				process.nextTick( function() {
 					__scope.mongodClient.collection("sessionLoginCodes", function( err, n_collection ) {
-						result.expires = ((new Date()).getTime() + result.expiresBy);
+						result.expires = new Date((new Date()).getTime() + result.expiresBy);
 						n_collection.update( { code: result.code }, result );
 					});
 				} );
@@ -127,7 +127,12 @@ StorageAdapterMongoDB.prototype.storeSessionLoginCode = function( code, state, e
 	}
 	var expiryDate = new Date( (new Date()).getTime() + expiry );
 	this.mongodClient.collection("sessionLoginCodes", function(err, collection) {
-		collection.insert( { code: code, stateObject: state, expires: expiryDate.getTime(), expiresBy: expiry } );
+		collection.insert( { code: code, stateObject: state, expires: expiryDate, expiresBy: expiry } );
+	});
+};
+StorageAdapterMongoDB.prototype.removeSessionLoginCode = function( code ) {
+	this.mongodClient.collection("sessionLoginCodes", function(err, collection) {
+		collection.remove( { code: code } );
 	});
 };
 StorageAdapterMongoDB.prototype.timer_sessionLoginCodeHandler = function( runAt ) {
@@ -168,6 +173,9 @@ StorageAdapterMongoDB.prototype.assignUserOAuth2Session = function( user_id, aut
 		} else {
 			__scope.mongodClient.collection("oauth2Sessions", function(err, collection) {
 				oauth2Session.auth_code = auth_code;
+				delete oauth2Session.authorization_token;
+				delete authorization_token_created_at;
+				delete authorization_token_expire_at;
 				__scope.updateUserOAuth2Session( { user_id: user_id, client_id: stateObject.client_id }, oauth2Session );
 			});
 		}
@@ -185,6 +193,12 @@ StorageAdapterMongoDB.prototype.updateUserOAuth2Session = function( params, newS
 		collection.update( params, newSessionObject );
 	});
 };
+StorageAdapterMongoDB.prototype.removeOAuth2UserSession = function( user_id, client_id ) {
+	this.mongodClient.collection("oauth2Sessions", function(err, collection) {
+		collection.remove( { user_id: user_id, client_id: client_id } );
+	});
+};
+
 StorageAdapterMongoDB.prototype.getUserAccountBy = function( params, callback ) {
 	this.mongodClient.collection("users", function(err, collection) {
 		collection.findOne( params, function(err, result) {

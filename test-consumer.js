@@ -7,6 +7,7 @@ var postSetup = require("./test/post-setup").PostSetup;
 	
 var ps = new postSetup();
 ps.runPostTest( ps.getPostData_refreshToken() );
+//ps.runPostTest( ps.getPostData_authToken() );
 
 var server = net.createServer(function (socket) {
   socket.write('Echo server\r\n');

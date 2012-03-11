@@ -5,7 +5,8 @@ body
 	form(action='/oauth2/do-login', method='post')
 		if ( error != null )
 			p There was an error: #{error}
-		input(type='hidden', name='ses', value='#{sessionCode}')
+		if ( sessionCode != null )
+			input(type='hidden', name='ses', value='#{sessionCode}')
 		p Username:
 			input(type='text', name='username')
 		p Password:
