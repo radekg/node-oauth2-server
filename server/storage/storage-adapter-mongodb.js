@@ -2,7 +2,8 @@ var util = require("util")
 	, url = require("url")
 	, Db = require('mongodb').Db
 	, Connection = require('mongodb').Connection
-	, Server = require('mongodb').Server;
+	, Server = require('mongodb').Server
+	, log = require("logging").from(__filename);
 
 function StorageAdapterMongoDB( connection_string ) {
 	this.oauth2Server = null;
@@ -10,15 +11,13 @@ function StorageAdapterMongoDB( connection_string ) {
 };
 
 StorageAdapterMongoDB.prototype.callback_success_default = function( scopes ) {
-	util.puts( "connected" );
+	log( "connected" );
 };
 StorageAdapterMongoDB.prototype.callback_fail_default = function( err ) {
-	util.puts( "no connection: " + JSON.stringify(err) );
+	log( "no connection: " + JSON.stringify(err) );
 };
 
 StorageAdapterMongoDB.prototype.connect = function( onSuccess, onFault ) {
-	
-	util.puts("Attempting to open a DB connection using: " + this.connection_string + ".");
 	
 	var __scope = this;
 	
@@ -27,12 +26,16 @@ StorageAdapterMongoDB.prototype.connect = function( onSuccess, onFault ) {
 		username: "",
 		password: "" };
 	var urlParsed = url.parse( this.connection_string );
+	var toLog = urlParsed;
 	if ( urlParsed.auth ) {
 		mongod.requires_auth = true;
 		var authParts = urlParsed.auth.split(":");
 		mongod.username = authParts[0];
 		mongod.password = authParts[1];
+		toLog.auth = mongod.username + ":...";
 	}
+	
+	log("Attempting to open a DB connection using: " + url.format( toLog ) + ".");
 	
 	this.mongodClient = new Db(
 		urlParsed.pathname.substr(1, urlParsed.pathname.length )
@@ -42,21 +45,21 @@ StorageAdapterMongoDB.prototype.connect = function( onSuccess, onFault ) {
 			, {} ) );
 	this.mongodClient.open(function(err, p_client) {
 		if ( err ) {
-			util.puts("Could not connect to the database.");
+			log("Could not connect to the database.");
 			onFault( err );
 		} else {
 			if ( mongod.requires_auth ) {
 				p_client.authenticate( mongod.username, mongod.password, function( err, collection ) {
 					if ( err != null ) {
-						util.puts("Database authentication failed.");
+						log("Database authentication failed.");
 						onFault( err );
 					} else {
-						util.puts("Connection with authentication successful. Attempting to load OAuth2 scopes.");
+						log("Connection with authentication successful. Attempting to load OAuth2 scopes.");
 						__scope.load_scopes( __scope, onSuccess, onFault );
 					}
 				} );
 			} else {
-				util.puts("Connection successful. Attempting to load OAuth2 scopes.");
+				log("Connection successful. Attempting to load OAuth2 scopes.");
 				__scope.load_scopes( __scope, onSuccess, onFault );
 			}
 		}
@@ -64,17 +67,19 @@ StorageAdapterMongoDB.prototype.connect = function( onSuccess, onFault ) {
 };
 
 StorageAdapterMongoDB.prototype.load_scopes = function( adapter, onSuccess, onFault ) {
-	adapter.mongodClient.collection("scopes", function(err, collection) {
-		collection.find({}, function(err, cursor) {
-			cursor.toArray( function(err, arr) {
-				if ( err ) {
-					util.puts("Error while loading scopes.");
-					onFault( err );
-				} else {
-					adapter.oauth2Server.scopes = arr;
-					util.puts("Scopes loaded correctly.");
-					onSuccess( );
-				}
+	process.nextTick(function() {
+		adapter.mongodClient.collection("scopes", function(err, collection) {
+			collection.find({}, function(err, cursor) {
+				cursor.toArray( function(err, arr) {
+					if ( err ) {
+						log("Error while loading scopes.");
+						onFault( err );
+					} else {
+						adapter.oauth2Server.scopes = arr;
+						log("Scopes loaded correctly.");
+						onSuccess( );
+					}
+				});
 			});
 		});
 	});
@@ -82,8 +87,9 @@ StorageAdapterMongoDB.prototype.load_scopes = function( adapter, onSuccess, onFa
 
 StorageAdapterMongoDB.prototype.storeAuthCode = function( code, state, expiry ) {
 	if ( !expiry ) {
-		expiry = 300000;
+		expiry = this.oauth2Server.authCodeExpiry;
 	}
+	log( "Storing authCode " + code + " which will expire in " + expiry + "ms." );
 	var expiryDate = new Date( (new Date()).getTime() + expiry );
 	this.mongodClient.collection("authCodes", function(err, collection) {
 		collection.insert( { auth_code: code, state: state, expires: expiryDate } );
@@ -97,7 +103,6 @@ StorageAdapterMongoDB.prototype.getOAuth2InputByAuthCode = function( code, callb
 	});
 };
 StorageAdapterMongoDB.prototype.timer_authCodeHandler = function( runAt ) {
-	// util.puts("Running an auth code clean handler");
 	this.mongodClient.collection("authCodes", function(err,collection) {
 		collection.remove( { expires: { $lt: runAt } } )
 	});
@@ -123,8 +128,9 @@ StorageAdapterMongoDB.prototype.getOauth2InputBySessionLoginCode = function( cod
 };
 StorageAdapterMongoDB.prototype.storeSessionLoginCode = function( code, state, expiry ) {
 	if ( !expiry ) {
-		expiry = 60000;
+		expiry = this.oauth2Server.sessionLoginExpiry;
 	}
+	log( "Storing sessionLoginCode " + code + " which will expire in " + expiry + "ms." );
 	var expiryDate = new Date( (new Date()).getTime() + expiry );
 	this.mongodClient.collection("sessionLoginCodes", function(err, collection) {
 		collection.insert( { code: code, stateObject: state, expires: expiryDate, expiresBy: expiry } );
@@ -136,7 +142,6 @@ StorageAdapterMongoDB.prototype.removeSessionLoginCode = function( code ) {
 	});
 };
 StorageAdapterMongoDB.prototype.timer_sessionLoginCodeHandler = function( runAt ) {
-	// util.puts("Running a session login code clean handler");
 	this.mongodClient.collection("sessionLoginCodes", function(err,collection) {
 		collection.remove( { expires: { $lt: runAt } } )
 	});
@@ -164,13 +169,16 @@ StorageAdapterMongoDB.prototype.updateUserPrivileges = function( user_id, client
 };
 StorageAdapterMongoDB.prototype.assignUserOAuth2Session = function( user_id, auth_code, stateObject ) {
 	var __scope = this;
+	log("Assigning OAuth2 session. Only one session per user_id/client_id pair.");
 	this.getUserOAuth2Session( { user_id: user_id, client_id: stateObject.client_id }, function( oauth2Session ) {
 		if ( oauth2Session == null ) {
+			log(" : Session doesn't exist for the user. Create new.");
 			__scope.mongodClient.collection("oauth2Sessions", function(err, collection) {
 				var refreshToken = __scope.oauth2Server.generateRefreshToken( stateObject.client_id );
 				collection.insert( { user_id: user_id, auth_code: auth_code, client_id: stateObject.client_id, state: stateObject, refresh_token: refreshToken } );
 			});
 		} else {
+			log(" : Session found, update existing.");
 			__scope.mongodClient.collection("oauth2Sessions", function(err, collection) {
 				oauth2Session.auth_code = auth_code;
 				delete oauth2Session.authorization_token;
@@ -189,6 +197,7 @@ StorageAdapterMongoDB.prototype.getUserOAuth2Session = function( params, callbac
 	});
 };
 StorageAdapterMongoDB.prototype.updateUserOAuth2Session = function( params, newSessionObject ) {
+	log( "Updating OAuth2 session : ", params, newSessionObject );
 	this.mongodClient.collection("oauth2Sessions", function(err, collection) {
 		collection.update( params, newSessionObject );
 	});

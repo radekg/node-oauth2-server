@@ -1,6 +1,7 @@
 var util = require("util")
 	, hash = require("jshashes")
-	, url = require("url");
+	, url = require("url")
+	, log = require("logging").from(__filename);
 
 function OAuth2Server( settings ) {
 	
@@ -10,8 +11,8 @@ function OAuth2Server( settings ) {
 	this.scopes = config.scopes || [];
 	this.storageAdapter = config.storageAdapter || null;
 	this.webAdapter = config.webAdapter || null;
-	this.expiryDefault = config.expiryDefault || 60000;
-	this.sessionLoginExpiryDefault = config.sessionLoginExpiryDefault || 60000;
+	this.authCodeExpiry = config.authCodeExpiry || 60000;
+	this.sessionLoginExpiry = config.sessionLoginExpiry || 60000;
 	this.verifyFullRedirectUri = config.verifyFullRedirectUri || false;
 	
 	if ( this.storageAdapter ) {
@@ -23,11 +24,13 @@ function OAuth2Server( settings ) {
 	
 	this.__$handleAuthCodeTimer = function(scope) {
 		if ( __scope.storageAdapter && __scope.storageAdapter.timer_authCodeHandler ) {
+//			log("Cleaning auth codes");
 			__scope.storageAdapter.timer_authCodeHandler( new Date() );
 		}
 	};
 	this.__$handleSessionLoginCodeTimer = function(scope) {
 		if ( __scope.storageAdapter && __scope.storageAdapter.timer_sessionLoginCodeHandler ) {
+//			log("Cleaning session login codes");
 			__scope.storageAdapter.timer_sessionLoginCodeHandler( new Date() );
 		}
 	};
@@ -37,6 +40,7 @@ function OAuth2Server( settings ) {
 };
 OAuth2Server.prototype.start = function( onSuccess, onFault ) {
 	if ( this.storageAdapter ) {
+		log("Starting OAUth2 server...");
 		this.storageAdapter.connect( onSuccess, onFault );
 	} else {
 		onFault("No storage adapter assigned, can't proceed.");
@@ -76,8 +80,7 @@ OAuth2Server.prototype.sendResponse = function( stateObject, data, response ) {
 OAuth2Server.prototype.sendBodyResponse = function( data, response ) {
 	var respData = JSON.stringify( data );
 	response.writeHead( 200 )
-	response.write(respData);
-	response.end();
+	response.end(respData);
 }
 
 OAuth2Server.prototype.sendErrorResponse = function( stateObject, errorObject, response ) {
@@ -179,11 +182,6 @@ OAuth2Server.prototype.validateTokenRequest = function(stateObject) {
 			resp.error_description = "Parameter code required.";
 			return resp;
 		}
-		/*if ( stateObject.redirect_uri == null ) {
-			resp.error = "invalid_request";
-			resp.error_description = "Parameter redirect_uri required.";
-			return resp;
-		}*/
 	} else if ( stateObject.grant_type === "refresh_token" ) {
 		if ( stateObject.refresh_token == null ) {
 			resp.error = "invalid_request";
@@ -206,16 +204,20 @@ OAuth2Server.prototype.validateTokenRequest = function(stateObject) {
 }
 
 OAuth2Server.prototype.generateRefreshToken = function( client_id ) {
+	log("Generate refresh token.");
 	return this.generateLoginSessionCode();
 };
 OAuth2Server.prototype.generateAuthToken = function( client_id ) {
+	log("Generate auth token.");
 	return this.generateLoginSessionCode();
 };
 OAuth2Server.prototype.generateLoginSessionCode = function( client_id ) {
+	log("Generate session login code.");
 	var code = new hash.SHA1().b64( (new Date()).toString() + Math.random() + client_id + this.randomString(50) );
 	return code;
 };
 OAuth2Server.prototype.generateAuthCode = function( client_id ) {
+	log("Generate auth code.");
 	var code = new hash.SHA1().b64( (new Date()).toString() + Math.random() + client_id + this.randomString(8) );
 	return code;
 };

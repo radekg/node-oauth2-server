@@ -5,7 +5,8 @@ var express = require("express")
 	, OAuth2Server = require("./server/oauth2-server").OAuth2Server
 	, StorageAdapter = require("./server/storage/storage-adapter-mongodb").StorageAdapterMongoDB
 	, WebAdapter = require("./server/web/web-adapter-express").WebAdapterExpress
-	, MongoStore = require('connect-mongo');
+	, MongoStore = require('connect-mongo')
+	, log = require("logging").from(__filename);
 
 var app = express.createServer();
 app.set('view options', { layout: false });
@@ -35,10 +36,12 @@ var appRoutes = {
 	, process_token: "/oauth2/token"
 };
 var oauth2Server = (new OAuth2Server({
-	storageAdapter: new StorageAdapter( process.env.MONGOLAB_URI || "mongod://127.0.0.1:27017/oauth2-server-test" )
+	sessionLoginExpiryDefault: 60000
+	, authCodeExpiry: 300000
+	, storageAdapter: new StorageAdapter( process.env.MONGOLAB_URI || "mongod://127.0.0.1:27017/oauth2-server-test" )
 	, webAdapter: new WebAdapter( appRoutes ) })).start(
-		function() { app.listen(3000); util.puts( " -> Application started on port 3000." ); }
-		, function( err ) { util.puts("Can't connect to the storage adapter. Can't continue. Error: " + JSON.stringify(err)); } );
+		function() { app.listen(3000); log( "Application started on port 3000." ); }
+		, function( err ) { log("Can't connect to the storage adapter. Can't continue. Error: " + JSON.stringify(err)); } );
 
 app.get(oauth2Server.webAdapter.routes.page_error, oauth2Server.webAdapter.page_errorHandler);
 app.get(oauth2Server.webAdapter.routes.page_login, oauth2Server.webAdapter.page_loginHandler);

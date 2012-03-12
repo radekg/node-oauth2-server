@@ -7,5 +7,6 @@
                 , "qs": "latest"
                 , "jshashes": "latest"
 				, "mongodb": "latest"
+				, "logging": "latest"
   }
 }
