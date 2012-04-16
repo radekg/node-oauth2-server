@@ -25,8 +25,6 @@ It's not only a standard implementation. This project tries to be a blueprint fo
 	* jade <https://github.com/visionmedia/jade>
 	* mongodb-native <https://github.com/christkv/node-mongodb-native>
 
-The reason why latest Node is used is that I could;t really be bothered testing with versions between 0.4.7 (what Heroku uses) and the latest one. I know though the connect stuff this project uses (body parser / cookie parser / mongo session implementation) doesn't work with 0.4.7. And I'm running my own VPS, yes, I know, by I need my own writable LOCAL filesystem.
-
 To get the connect session stuff working with mongodb - check this link <http://stackoverflow.com/a/9495689>.
 
 ## Quick start
